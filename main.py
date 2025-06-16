@@ -13,10 +13,8 @@ from urllib.parse import quote
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'
 COOKIES_FILE_PATH = "cookies.txt"
 
-# --- PROXY CONFIGURATION ---
-# The base URL of your custom Node.js application-level proxy.
-# This will be used to wrap all YouTube URLs.
-PROXY_BASE_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
+# --- No longer need a proxy URL ---
+# PROXY_BASE_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
 
 
 def get_ffmpeg_path():
@@ -43,8 +41,8 @@ async def fetch_spotify_data(spotify_url):
 
 def download_track(track, save_dir, ffmpeg_path):
     """
-    Downloads a single track using yt-dlp.
-    It URL-encodes and wraps the YouTube URL with the proxy URL to bypass restrictions.
+    Downloads a single track using yt-dlp, adding custom headers
+    to emulate a browser and bypass restrictions.
     """
     try:
         # Sanitize track name and artist for a valid filename
@@ -67,22 +65,19 @@ def download_track(track, save_dir, ffmpeg_path):
             return None, f"Skipped: {track.get('name')} (no YouTube ID found)"
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        # --- MODIFIED PROXY AND LOGGING LOGIC ---
-        # URL-encode the YouTube URL before appending it. safe='' ensures that '/' is also encoded.
-        encoded_youtube_url = quote(youtube_url, safe='')
-        
-        # "Wrap" the encoded YouTube URL with your proxy's URL.
-        download_url = f"{PROXY_BASE_URL}/{encoded_youtube_url}"
-        
-        # Log the exact URL being used for the download attempt.
-        st.info(f"Attempting download. Full proxy URL: {download_url}")
-
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
 
-        # Build the yt-dlp command. Note the ABSENCE of the --proxy flag.
+        # --- MODIFIED: Build yt-dlp command with custom headers ---
         command = [
             "yt-dlp",
             "--ffmpeg-location", ffmpeg_path,
+            
+            # Add headers to emulate a browser request, just like the proxy did
+            "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "--add-header", "Referer: https://www.youtube.com/",
+            "--add-header", "Origin: https://www.youtube.com",
+            "--add-header", "Accept-Language: en-US,en;q=0.9",
+            
             "-f", "bestaudio/best",
             "-x",
             "--audio-format", "mp3",
@@ -92,10 +87,10 @@ def download_track(track, save_dir, ffmpeg_path):
         if os.path.exists(COOKIES_FILE_PATH):
             command.extend(["--cookies", COOKIES_FILE_PATH])
 
-        # Add the output template and the final (wrapped and encoded) URL
+        # Add the output template and the final URL
         command.extend([
             "--output", temp_output_template,
-            download_url,  # This is the URL that points to your proxy
+            youtube_url, # Use the direct YouTube URL
         ])
         
         # --- END OF MODIFICATION ---
@@ -121,8 +116,8 @@ def main():
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
     
     st.info(f"""
-    **Using Proxy:** All downloads are routed through `{PROXY_BASE_URL}`.  
-    **Cookies:** For age-restricted content, place a `cookies.txt` file in the app's root directory.
+    **Downloads are sent directly with browser headers to improve success.**
+    **Cookies:** For age-restricted content, place a `{COOKIES_FILE_PATH}` file in the app's root directory.
     """)
 
     if 'download_dir' not in st.session_state:
