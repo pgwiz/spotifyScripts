@@ -15,8 +15,8 @@ API_BASE_URL = 'https://spotify-one-lime.vercel.app'
 COOKIES_FILE_PATH = "cookies.txt"
 
 # --- PROXY CONFIGURATION ---
-# The URL of your standard HTTP/HTTPS forward proxy.
-PROXY_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
+# No longer using an external proxy. Headers will be added directly.
+# PROXY_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
 
 
 def get_ffmpeg_path():
@@ -44,7 +44,7 @@ async def fetch_spotify_data(spotify_url):
 def download_track(track, save_dir, ffmpeg_path):
     """
     Downloads a single track by calling the yt-dlp command-line tool,
-    routing all traffic through the specified proxy.
+    adding custom headers to emulate a browser request.
     """
     try:
         # Sanitize track name and artist for a valid final filename
@@ -69,11 +69,13 @@ def download_track(track, save_dir, ffmpeg_path):
         
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
         
-        # --- REVERTED TO SUBPROCESS METHOD ---
+        # --- REVERTED TO SUBPROCESS METHOD AND ADDED HEADERS ---
         command = [
             "yt-dlp",
-            # Add proxy
-            "--proxy", PROXY_URL,
+            # Add headers to emulate a browser request
+            "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+            "--add-header", "Referer: https://www.youtube.com/",
+            
             # Add format selection with filesize limit
             "-f", "bestaudio[filesize<15M]/best",
             # Add ffmpeg location
@@ -103,7 +105,6 @@ def download_track(track, save_dir, ffmpeg_path):
                 return filepath, f"Downloaded: {filename}"
             else:
                 # Fallback for cases where the temp file isn't named as expected
-                # This is less likely with subprocess but good practice
                 for f in os.listdir(save_dir):
                     if f.startswith(video_id) and f.endswith('.mp3'):
                         shutil.move(os.path.join(save_dir, f), filepath)
@@ -125,7 +126,7 @@ def main():
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
     
     st.info(f"""
-    **Using Proxy:** All downloads are routed through `{PROXY_URL}`.
+    **Downloads are sent directly with browser headers to improve success.**
     **Cookies:** For age-restricted content, place a `{COOKIES_FILE_PATH}` file in the app's root directory.
     """)
 
@@ -152,17 +153,17 @@ def main():
                     st.error("Could not retrieve track list from Spotify link.")
                     return
             elif "youtube.com" in url or "youtu.be" in url:
-                # --- REVERTED TO SUBPROCESS FOR INFO FETCHING ---
+                # Use headers for fetching info as well, for consistency
                 try:
                     info_command = [
                         "yt-dlp",
-                        "--proxy", PROXY_URL,
+                        "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
                         "--get-title",
                         "--get-id",
                         url
                     ]
                     process = subprocess.run(info_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-                    if process.returncode == 0:
+                    if process.returncode == 0 and process.stdout:
                         title, video_id = process.stdout.strip().split('\n')
                         tracks = [{'videoId': video_id, 'name': title or "YouTube Video", 'artist': 'N/A'}]
                     else:
