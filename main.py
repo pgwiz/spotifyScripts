@@ -13,10 +13,13 @@ from yt_dlp import YoutubeDL
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'
 COOKIES_FILE_PATH = "cookies.txt"
 
+# --- PROXY CONFIGURATION ---
+# The URL of your new standard HTTP/HTTPS forward proxy.
+PROXY_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
+
 
 def get_ffmpeg_path():
     """Check for ffmpeg executable in the system's PATH."""
-    # This is still needed for yt-dlp to find the ffmpeg binary
     return shutil.which("ffmpeg")
 
 
@@ -39,8 +42,8 @@ async def fetch_spotify_data(spotify_url):
 
 def download_track(track, save_dir, ffmpeg_path):
     """
-    Downloads a single track using the yt-dlp Python library, 
-    adding custom headers to emulate a browser.
+    Downloads a single track using the yt-dlp Python library,
+    routing all traffic through the specified proxy.
     """
     try:
         # Sanitize track name and artist for a valid final filename
@@ -57,34 +60,28 @@ def download_track(track, save_dir, ffmpeg_path):
         if os.path.exists(filepath):
             return filepath, f"Skipped: {filename} (already exists)"
 
-        # Construct the full YouTube URL from the video ID
+        # Construct the direct YouTube URL from the video ID
         video_id = track.get('videoId')
         if not video_id:
             return None, f"Skipped: {track.get('name')} (no YouTube ID found)"
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
-
-        # --- MODIFIED: Use yt-dlp as a Python library ---
+        
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
         
+        # --- MODIFIED: Use yt-dlp's native proxy option ---
         ydl_opts = {
             'format': 'bestaudio/best',
             'outtmpl': temp_output_template,
             'ffmpeg_location': ffmpeg_path,
             'extractaudio': True,
             'audioformat': 'mp3',
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Referer': 'https://www.youtube.com/',
-                'Origin': 'https://www.youtube.com',
-                'Accept-Language': 'en-US,en;q=0.9',
-            },
-            # Conditionally add the cookie file if it exists
+            'proxy': PROXY_URL, # Tell yt-dlp to use the forward proxy
             'cookiefile': COOKIES_FILE_PATH if os.path.exists(COOKIES_FILE_PATH) else None,
-            'quiet': True, # Suppress console output from yt-dlp
+            'quiet': True,
             'no_warnings': True,
         }
 
-        # Perform the download
+        # Perform the download. yt-dlp will handle the proxy connection.
         with YoutubeDL(ydl_opts) as ydl:
             ydl.download([youtube_url])
 
@@ -97,7 +94,6 @@ def download_track(track, save_dir, ffmpeg_path):
             raise FileNotFoundError("yt-dlp did not produce the expected file.")
         
     except Exception as e:
-        # Catch download errors and other exceptions
         return None, f"Error downloading '{track.get('name', 'Unknown')}': {e}"
 
 
@@ -108,7 +104,7 @@ def main():
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
     
     st.info(f"""
-    **Downloads are sent directly with browser headers to improve success.**
+    **Using Proxy:** All downloads are routed through `{PROXY_URL}`.
     **Cookies:** For age-restricted content, place a `{COOKIES_FILE_PATH}` file in the app's root directory.
     """)
 
@@ -135,9 +131,10 @@ def main():
                     st.error("Could not retrieve track list from Spotify link.")
                     return
             elif "youtube.com" in url or "youtu.be" in url:
-                # --- MODIFIED: Use yt-dlp library to fetch info ---
                 try:
-                    with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                    # Use the proxy for fetching info as well, for consistency
+                    ydl_opts = {'quiet': True, 'no_warnings': True, 'proxy': PROXY_URL}
+                    with YoutubeDL(ydl_opts) as ydl:
                         info = ydl.extract_info(url, download=False)
                         video_id = info.get('id')
                         title = info.get('title')
