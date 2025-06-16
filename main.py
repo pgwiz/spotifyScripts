@@ -6,6 +6,8 @@ import os
 import json
 import re
 import shutil
+import time
+import random
 from zipfile import ZipFile
 
 # --- Configuration ---
@@ -43,55 +45,86 @@ async def fetch_spotify_data(spotify_url):
         return None
 
 
-def download_youtube_urls(urls_to_download, save_dir, ffmpeg_path):
+def download_single_youtube_url(url_to_download, save_dir, ffmpeg_path, progress_bar, status_text):
     """
-    Downloads a list of YouTube URLs using the yt-dlp command-line tool.
-    This function contains the core download logic.
+    Downloads a single YouTube URL and updates a Streamlit progress bar in real-time.
     """
     try:
-        if not urls_to_download:
-            return None, "No valid YouTube URLs were provided to download."
+        if not url_to_download:
+            return None, "No valid YouTube URL was provided."
 
         # Base command for yt-dlp
         command = [
             "yt-dlp",
-            # Add headers to emulate a browser request, which can help bypass restrictions
+            # Add headers to emulate a browser request
             "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
             "--add-header", "Referer: https://www.youtube.com/",
-
             # Add format selection with a 15MB filesize limit
             "-f", "bestaudio[filesize<15M]/best",
             # Add ffmpeg location
             "--ffmpeg-location", ffmpeg_path,
             # Add audio extraction options
-            "-x",
-            "--audio-format", "mp3",
+            "-x", "--audio-format", "mp3",
             # Define the output template
             "--output", os.path.join(save_dir, "%(title)s.%(ext)s"),
+            # Ensure progress is output to stdout
+            "--progress",
         ]
 
-        # Add cookies argument if a cookies.txt file exists in the directory
+        # Add cookies argument if a cookies.txt file exists
         if os.path.exists(COOKIES_FILE_PATH):
             command.extend(["--cookies", COOKIES_FILE_PATH])
 
-        # Add all the YouTube URLs to the command
-        command.extend(urls_to_download)
+        # Add the URL to the command
+        command.append(url_to_download)
 
-        # Execute the command
-        process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        # Execute the command using Popen to capture output in real-time
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding='utf-8',
+            errors='ignore'
+        )
+
+        downloaded_file_path = None
+        
+        if process.stdout:
+            for line in iter(process.stdout.readline, ""):
+                if not line:
+                    break
+                
+                # Update the status text with the raw yt-dlp output
+                status_text.text(line.strip())
+                
+                # Search for the download percentage
+                match = re.search(r"\[download\]\s+([0-9.]+)%", line)
+                if match:
+                    percentage = float(match.group(1))
+                    progress_bar.progress(percentage / 100.0)
+                
+                # Capture the final file path after conversion
+                if '[ExtractAudio]' in line and 'Destination:' in line:
+                    downloaded_file_path = line.split('Destination: ')[1].strip()
+
+        process.wait()
 
         if process.returncode != 0:
-            # If yt-dlp fails, return its error message for debugging
-            error_message = process.stderr or "An unknown error occurred with yt-dlp."
-            st.error(f"Download failed: {error_message.strip()}")
-            return None, f"Download failed. See error details above."
+            error_message = f"Download failed for {url_to_download}."
+            st.warning(error_message)
+            return None, error_message
+
+        # Verify the file exists
+        if downloaded_file_path and os.path.exists(downloaded_file_path):
+             return [downloaded_file_path], "Successfully downloaded track."
         
-        # If successful, find the list of downloaded files
-        downloaded_files = [os.path.join(save_dir, f) for f in os.listdir(save_dir) if f.endswith('.mp3')]
-        if not downloaded_files:
-            return None, "Download process finished, but no new audio files were found. They might have been filtered by quality settings."
+        # Fallback if the path wasn't captured but files exist
+        found_files = [os.path.join(save_dir, f) for f in os.listdir(save_dir) if f.endswith('.mp3')]
+        if found_files:
+            return found_files, "Successfully downloaded track(s)."
             
-        return downloaded_files, f"Successfully downloaded {len(downloaded_files)} track(s)."
+        return None, "Download process finished, but no output file was found."
 
     except Exception as e:
         st.error(f"A critical error occurred during the download process: {e}")
@@ -99,7 +132,7 @@ def download_youtube_urls(urls_to_download, save_dir, ffmpeg_path):
 
 
 def main():
-    st.set_page_config(page_title="Music Downloader", page_icon="�", layout="centered")
+    st.set_page_config(page_title="Music Downloader", page_icon="🎵", layout="centered")
 
     st.title("🎵 Spotify & YouTube Downloader")
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
@@ -140,20 +173,54 @@ def main():
             else:
                 st.error("Please enter a valid Spotify or YouTube URL.")
                 return
-
-        with st.spinner(f"Downloading {len(youtube_urls)} track(s)... This may take a while."):
-            downloaded_files, message = download_youtube_urls(youtube_urls, save_dir, ffmpeg_path)
-            st.info(message)
         
-        if downloaded_files:
+        st.info(f"Found {len(youtube_urls)} track(s). Starting download process...")
+        
+        all_downloaded_files = []
+        
+        # Placeholders for dynamic UI elements
+        overall_progress_text = st.empty()
+        overall_progress_bar = st.progress(0)
+        song_progress_placeholder = st.empty()
+        status_text_placeholder = st.empty()
+
+
+        for i, single_url in enumerate(youtube_urls):
+            overall_progress_text.text(f"Overall Progress: Track {i+1} of {len(youtube_urls)}")
+            
+            # Create a container for the current song's progress UI
+            with song_progress_placeholder.container():
+                st.write(f"Downloading: {single_url}")
+                song_progress_bar = st.progress(0)
+
+            # Pass a list containing just one URL to the download function
+            downloaded_files, message = download_single_youtube_url(single_url, save_dir, ffmpeg_path, song_progress_bar, status_text_placeholder)
+            
+            if downloaded_files:
+                all_downloaded_files.extend(downloaded_files)
+
+            # Update overall progress
+            overall_progress_bar.progress((i + 1) / len(youtube_urls))
+
+            # Add a random delay to avoid rate-limiting
+            if i < len(youtube_urls) - 1:
+                delay = random.uniform(3, 7) # Wait for 3 to 7 seconds
+                time.sleep(delay)
+        
+        # Clear the dynamic UI elements after the loop
+        overall_progress_text.empty()
+        song_progress_placeholder.empty()
+        status_text_placeholder.empty()
+
+        if all_downloaded_files:
             st.success("All downloads are complete!")
             
-            if len(downloaded_files) > 1:
+            if len(all_downloaded_files) > 1:
                 # If there are multiple files, offer them as a single zip archive
                 with st.spinner("Compressing files into a zip archive..."):
                     zip_path = os.path.join(save_dir, "downloaded_music.zip")
                     with ZipFile(zip_path, 'w') as zipf:
-                        for file in downloaded_files:
+                        for file in all_downloaded_files:
                             zipf.write(file, os.path.basename(file))
                 
                 with open(zip_path, "rb") as f:
@@ -163,9 +230,9 @@ def main():
                         file_name="downloaded_music.zip",
                         mime="application/zip"
                     )
-            else:
+            elif all_downloaded_files:
                 # If there's only one file, offer it directly
-                single_file_path = downloaded_files[0]
+                single_file_path = all_downloaded_files[0]
                 with open(single_file_path, "rb") as f:
                     st.download_button(
                         label=f"Download {os.path.basename(single_file_path)}",
