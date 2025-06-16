@@ -7,18 +7,16 @@ import json
 import re
 import shutil
 from zipfile import ZipFile
-from urllib.parse import quote
+from yt_dlp import YoutubeDL
 
 # --- Configuration ---
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'
 COOKIES_FILE_PATH = "cookies.txt"
 
-# --- No longer need a proxy URL ---
-# PROXY_BASE_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
-
 
 def get_ffmpeg_path():
     """Check for ffmpeg executable in the system's PATH."""
+    # This is still needed for yt-dlp to find the ffmpeg binary
     return shutil.which("ffmpeg")
 
 
@@ -41,11 +39,11 @@ async def fetch_spotify_data(spotify_url):
 
 def download_track(track, save_dir, ffmpeg_path):
     """
-    Downloads a single track using yt-dlp, adding custom headers
-    to emulate a browser and bypass restrictions.
+    Downloads a single track using the yt-dlp Python library, 
+    adding custom headers to emulate a browser.
     """
     try:
-        # Sanitize track name and artist for a valid filename
+        # Sanitize track name and artist for a valid final filename
         sanitized_name = re.sub(r'[\\/*?:"<>|]', "", track.get('name', 'Unknown'))
         artist = track.get('artist')
         if artist and artist != 'N/A':
@@ -65,48 +63,42 @@ def download_track(track, save_dir, ffmpeg_path):
             return None, f"Skipped: {track.get('name')} (no YouTube ID found)"
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
+        # --- MODIFIED: Use yt-dlp as a Python library ---
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
-
-        # --- MODIFIED: Build yt-dlp command with custom headers ---
-        command = [
-            "yt-dlp",
-            "--ffmpeg-location", ffmpeg_path,
-            
-            # Add headers to emulate a browser request, just like the proxy did
-            "--add-header", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-            "--add-header", "Referer: https://www.youtube.com/",
-            "--add-header", "Origin: https://www.youtube.com",
-            "--add-header", "Accept-Language: en-US,en;q=0.9",
-            
-            "-f", "bestaudio/best",
-            "-x",
-            "--audio-format", "mp3",
-        ]
-
-        # Add cookies argument if cookies.txt exists
-        if os.path.exists(COOKIES_FILE_PATH):
-            command.extend(["--cookies", COOKIES_FILE_PATH])
-
-        # Add the output template and the final URL
-        command.extend([
-            "--output", temp_output_template,
-            youtube_url, # Use the direct YouTube URL
-        ])
         
-        # --- END OF MODIFICATION ---
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_output_template,
+            'ffmpeg_location': ffmpeg_path,
+            'extractaudio': True,
+            'audioformat': 'mp3',
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Referer': 'https://www.youtube.com/',
+                'Origin': 'https://www.youtube.com',
+                'Accept-Language': 'en-US,en;q=0.9',
+            },
+            # Conditionally add the cookie file if it exists
+            'cookiefile': COOKIES_FILE_PATH if os.path.exists(COOKIES_FILE_PATH) else None,
+            'quiet': True, # Suppress console output from yt-dlp
+            'no_warnings': True,
+        }
 
-        process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+        # Perform the download
+        with YoutubeDL(ydl_opts) as ydl:
+            ydl.download([youtube_url])
 
-        if process.returncode == 0:
-            temp_filepath = os.path.join(save_dir, f"{video_id}.mp3")
-            if os.path.exists(temp_filepath):
-                shutil.move(temp_filepath, filepath)
-                return filepath, f"Downloaded: {filename}"
+        # Rename the downloaded file to the final, sanitized name
+        temp_filepath = os.path.join(save_dir, f"{video_id}.mp3")
+        if os.path.exists(temp_filepath):
+            shutil.move(temp_filepath, filepath)
+            return filepath, f"Downloaded: {filename}"
+        else:
+            raise FileNotFoundError("yt-dlp did not produce the expected file.")
         
-        error_message = process.stderr or "Unknown error"
-        return None, f"Failed: {filename}\nError: {error_message.strip()}"
     except Exception as e:
-        return None, f"Error downloading {track.get('name', 'Unknown')}: {e}"
+        # Catch download errors and other exceptions
+        return None, f"Error downloading '{track.get('name', 'Unknown')}': {e}"
 
 
 def main():
@@ -143,11 +135,13 @@ def main():
                     st.error("Could not retrieve track list from Spotify link.")
                     return
             elif "youtube.com" in url or "youtu.be" in url:
+                # --- MODIFIED: Use yt-dlp library to fetch info ---
                 try:
-                    info_command = ["yt-dlp", "--get-title", "--get-id", url]
-                    process = subprocess.run(info_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-                    title, video_id = process.stdout.strip().split('\n')
-                    tracks = [{'videoId': video_id, 'name': title or "YouTube Video", 'artist': 'N/A'}]
+                    with YoutubeDL({'quiet': True, 'no_warnings': True}) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        video_id = info.get('id')
+                        title = info.get('title')
+                        tracks = [{'videoId': video_id, 'name': title or "YouTube Video", 'artist': 'N/A'}]
                 except Exception as e:
                     st.error(f"Failed to get YouTube video details: {e}")
                     return
