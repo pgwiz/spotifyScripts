@@ -67,13 +67,15 @@ def download_track(track, save_dir, ffmpeg_path):
             return None, f"Skipped: {track.get('name')} (no YouTube ID found)"
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        # --- MODIFIED PROXY LOGIC ---
+        # --- MODIFIED PROXY AND LOGGING LOGIC ---
         # URL-encode the YouTube URL before appending it. safe='' ensures that '/' is also encoded.
         encoded_youtube_url = quote(youtube_url, safe='')
         
         # "Wrap" the encoded YouTube URL with your proxy's URL.
         download_url = f"{PROXY_BASE_URL}/{encoded_youtube_url}"
-        st.info(f"Using proxy: {PROXY_BASE_URL}")
+        
+        # Log the exact URL being used for the download attempt.
+        st.info(f"Attempting download. Full proxy URL: {download_url}")
 
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
 
@@ -119,7 +121,7 @@ def main():
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
     
     st.info(f"""
-    **Using Proxy:** All downloads are routed through `{PROXY_BASE_URL}` to improve success rates.  
+    **Using Proxy:** All downloads are routed through `{PROXY_BASE_URL}`.  
     **Cookies:** For age-restricted content, place a `cookies.txt` file in the app's root directory.
     """)
 
