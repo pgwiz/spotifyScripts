@@ -183,4 +183,3 @@ if __name__ == "__main__":
     if not os.path.exists(DOWNLOADS_DIR):
         os.makedirs(DOWNLOADS_DIR)
     main()
-�
