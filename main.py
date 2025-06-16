@@ -7,6 +7,7 @@ import json
 import re
 import shutil
 from zipfile import ZipFile
+from urllib.parse import quote
 
 # --- Configuration ---
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'
@@ -43,7 +44,7 @@ async def fetch_spotify_data(spotify_url):
 def download_track(track, save_dir, ffmpeg_path):
     """
     Downloads a single track using yt-dlp.
-    It wraps the YouTube URL with the proxy URL to bypass restrictions.
+    It URL-encodes and wraps the YouTube URL with the proxy URL to bypass restrictions.
     """
     try:
         # Sanitize track name and artist for a valid filename
@@ -67,9 +68,11 @@ def download_track(track, save_dir, ffmpeg_path):
         youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
         # --- MODIFIED PROXY LOGIC ---
-        # "Wrap" the YouTube URL with your proxy's URL.
-        # This sends the request to your proxy first.
-        download_url = f"{PROXY_BASE_URL}/{youtube_url}"
+        # URL-encode the YouTube URL before appending it. safe='' ensures that '/' is also encoded.
+        encoded_youtube_url = quote(youtube_url, safe='')
+        
+        # "Wrap" the encoded YouTube URL with your proxy's URL.
+        download_url = f"{PROXY_BASE_URL}/{encoded_youtube_url}"
         st.info(f"Using proxy: {PROXY_BASE_URL}")
 
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
@@ -87,7 +90,7 @@ def download_track(track, save_dir, ffmpeg_path):
         if os.path.exists(COOKIES_FILE_PATH):
             command.extend(["--cookies", COOKIES_FILE_PATH])
 
-        # Add the output template and the final (wrapped) URL
+        # Add the output template and the final (wrapped and encoded) URL
         command.extend([
             "--output", temp_output_template,
             download_url,  # This is the URL that points to your proxy
