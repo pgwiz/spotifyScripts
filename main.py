@@ -10,6 +10,7 @@ from zipfile import ZipFile
 
 # --- Configuration ---
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'  # Your Vercel API URL
+COOKIES_FILE_PATH = "cookies.txt"  # Define the path for the cookies file
 
 def get_ffmpeg_path():
     """Check for ffmpeg executable."""
@@ -55,15 +56,26 @@ def download_track(track, save_dir, ffmpeg_path):
 
         temp_output_template = os.path.join(save_dir, f"{track.get('videoId')}.%(ext)s")
         
+        # --- MODIFIED PART ---
+        # Base command for yt-dlp
         command = [
             "yt-dlp",
             "--ffmpeg-location", ffmpeg_path,
             "-f", "bestaudio/best",
             "-x",
             "--audio-format", "mp3",
+        ]
+
+        # If cookies.txt exists, add it to the command
+        if os.path.exists(COOKIES_FILE_PATH):
+            command.extend(["--cookies", COOKIES_FILE_PATH])
+        
+        # Add the remaining arguments
+        command.extend([
             "--output", temp_output_template,
             youtube_url,
-        ]
+        ])
+        # --- END OF MODIFICATION ---
 
         process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
         
@@ -73,7 +85,9 @@ def download_track(track, save_dir, ffmpeg_path):
                 shutil.move(temp_filepath, filepath)
                 return filepath, f"Downloaded: {filename}"
         
-        return None, f"Failed: {filename}\n{process.stderr}"
+        # Provide more detailed error logging if download fails
+        error_message = process.stderr or "Unknown error"
+        return None, f"Failed: {filename}\nError: {error_message.strip()}"
     except Exception as e:
         return None, f"Error downloading {track.get('name', 'Unknown')}: {e}"
 
@@ -82,6 +96,10 @@ def main():
 
     st.title("🎵 Spotify & YouTube Downloader")
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
+    
+    # --- NEW ---
+    # Inform the user about the cookies feature
+    st.info(f"💡 To download age-restricted or private content, place a `{COOKIES_FILE_PATH}` file in the app's root directory.")
 
     if 'download_dir' not in st.session_state:
         st.session_state.download_dir = f"temp_downloads_{os.urandom(8).hex()}"
@@ -89,7 +107,7 @@ def main():
 
     ffmpeg_path = get_ffmpeg_path()
     if not ffmpeg_path:
-        st.error("FFmpeg not found. Please ensure FFmpeg is installed and in your system's PATH.")
+        st.error("FFmpeg not found. Please ensure FFmpeg is installed and in your system's PATH. (Add it to packages.txt if deploying on Streamlit Cloud).")
         return
 
     url = st.text_input("Enter Spotify or YouTube URL:", "")
@@ -107,13 +125,11 @@ def main():
                     return
             elif "youtube.com" in url or "youtu.be" in url:
                 try:
-                    title_command = ["yt-dlp", "--get-title", url]
-                    process = subprocess.run(title_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-                    title = process.stdout.strip() or "YouTube Video"
-                    video_id_command = ["yt-dlp", "--get-id", url]
-                    process = subprocess.run(video_id_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-                    video_id = process.stdout.strip()
-                    tracks = [{'videoId': video_id, 'name': title, 'artist': 'N/A'}]
+                    # Use yt-dlp to get both title and ID at once to be more efficient
+                    info_command = ["yt-dlp", "--get-title", "--get-id", url]
+                    process = subprocess.run(info_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    title, video_id = process.stdout.strip().split('\n')
+                    tracks = [{'videoId': video_id, 'name': title or "YouTube Video", 'artist': 'N/A'}]
                 except Exception as e:
                     st.error(f"Failed to get YouTube video details: {e}")
                     return
@@ -167,17 +183,5 @@ def main():
     st.markdown("---")
     st.markdown("Created with ❤️ using Streamlit")
 
-
-def cleanup():
-    """Remove the temporary download directory."""
-    if 'download_dir' in st.session_state and os.path.exists(st.session_state.download_dir):
-        shutil.rmtree(st.session_state.download_dir)
-        del st.session_state.download_dir
-
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        # This part for cleanup might not run as expected in Streamlit's execution model.
-        # A manual cleanup or a scheduled task might be better for a deployed app.
-        pass
+    main()
