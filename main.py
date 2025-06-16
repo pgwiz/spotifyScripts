@@ -60,15 +60,13 @@ def download_track(track, save_dir, ffmpeg_path):
         # Base command for yt-dlp
         command = [
             "yt-dlp",
+            "--proxy", "https://territorial-klara-pgwiz-43ae3396.koyeb.app",
+            "--cookies", COOKIES_FILE_PATH,
             "--ffmpeg-location", ffmpeg_path,
             "-f", "bestaudio/best",
             "-x",
             "--audio-format", "mp3",
         ]
-
-        # If cookies.txt exists, add it to the command
-        if os.path.exists(COOKIES_FILE_PATH):
-            command.extend(["--cookies", COOKIES_FILE_PATH])
         
         # Add the remaining arguments
         command.extend([
