@@ -7,14 +7,15 @@ import json
 import re
 import shutil
 from zipfile import ZipFile
-from yt_dlp import YoutubeDL
+# The yt_dlp import is no longer needed as we'll use the command-line tool
+# from yt_dlp import YoutubeDL 
 
 # --- Configuration ---
 API_BASE_URL = 'https://spotify-one-lime.vercel.app'
 COOKIES_FILE_PATH = "cookies.txt"
 
 # --- PROXY CONFIGURATION ---
-# The URL of your new standard HTTP/HTTPS forward proxy.
+# The URL of your standard HTTP/HTTPS forward proxy.
 PROXY_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
 
 
@@ -42,7 +43,7 @@ async def fetch_spotify_data(spotify_url):
 
 def download_track(track, save_dir, ffmpeg_path):
     """
-    Downloads a single track using the yt-dlp Python library,
+    Downloads a single track by calling the yt-dlp command-line tool,
     routing all traffic through the specified proxy.
     """
     try:
@@ -68,33 +69,53 @@ def download_track(track, save_dir, ffmpeg_path):
         
         temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
         
-        # --- MODIFIED: Use yt-dlp's native proxy option ---
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'outtmpl': temp_output_template,
-            'ffmpeg_location': ffmpeg_path,
-            'extractaudio': True,
-            'audioformat': 'mp3',
-            'proxy': PROXY_URL, # Tell yt-dlp to use the forward proxy
-            'cookiefile': COOKIES_FILE_PATH if os.path.exists(COOKIES_FILE_PATH) else None,
-            'quiet': True,
-            'no_warnings': True,
-        }
+        # --- REVERTED TO SUBPROCESS METHOD ---
+        command = [
+            "yt-dlp",
+            # Add proxy
+            "--proxy", PROXY_URL,
+            # Add format selection with filesize limit
+            "-f", "bestaudio[filesize<15M]/best",
+            # Add ffmpeg location
+            "--ffmpeg-location", ffmpeg_path,
+            # Add audio extraction options
+            "-x",
+            "--audio-format", "mp3",
+        ]
 
-        # Perform the download. yt-dlp will handle the proxy connection.
-        with YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+        # Add cookies argument if cookies.txt exists
+        if os.path.exists(COOKIES_FILE_PATH):
+            command.extend(["--cookies", COOKIES_FILE_PATH])
+            
+        # Add output template and the URL
+        command.extend([
+            "--output", temp_output_template,
+            youtube_url,
+        ])
+        
+        process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
 
-        # Rename the downloaded file to the final, sanitized name
-        temp_filepath = os.path.join(save_dir, f"{video_id}.mp3")
-        if os.path.exists(temp_filepath):
-            shutil.move(temp_filepath, filepath)
-            return filepath, f"Downloaded: {filename}"
+        if process.returncode == 0:
+            # Rename the downloaded file to the final, sanitized name
+            temp_filepath = os.path.join(save_dir, f"{video_id}.mp3")
+            if os.path.exists(temp_filepath):
+                shutil.move(temp_filepath, filepath)
+                return filepath, f"Downloaded: {filename}"
+            else:
+                # Fallback for cases where the temp file isn't named as expected
+                # This is less likely with subprocess but good practice
+                for f in os.listdir(save_dir):
+                    if f.startswith(video_id) and f.endswith('.mp3'):
+                        shutil.move(os.path.join(save_dir, f), filepath)
+                        return filepath, f"Downloaded: {filename}"
+                raise FileNotFoundError("yt-dlp ran successfully but the expected output file was not found.")
         else:
-            raise FileNotFoundError("yt-dlp did not produce the expected file.")
+            # If yt-dlp fails, return its error message
+            error_message = process.stderr or "Unknown error from yt-dlp"
+            return None, f"Error downloading '{track.get('name', 'Unknown')}': {error_message.strip()}"
         
     except Exception as e:
-        return None, f"Error downloading '{track.get('name', 'Unknown')}': {e}"
+        return None, f"A critical error occurred: {e}"
 
 
 def main():
@@ -131,16 +152,24 @@ def main():
                     st.error("Could not retrieve track list from Spotify link.")
                     return
             elif "youtube.com" in url or "youtu.be" in url:
+                # --- REVERTED TO SUBPROCESS FOR INFO FETCHING ---
                 try:
-                    # Use the proxy for fetching info as well, for consistency
-                    ydl_opts = {'quiet': True, 'no_warnings': True, 'proxy': PROXY_URL}
-                    with YoutubeDL(ydl_opts) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        video_id = info.get('id')
-                        title = info.get('title')
+                    info_command = [
+                        "yt-dlp",
+                        "--proxy", PROXY_URL,
+                        "--get-title",
+                        "--get-id",
+                        url
+                    ]
+                    process = subprocess.run(info_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
+                    if process.returncode == 0:
+                        title, video_id = process.stdout.strip().split('\n')
                         tracks = [{'videoId': video_id, 'name': title or "YouTube Video", 'artist': 'N/A'}]
+                    else:
+                        st.error(f"Failed to get YouTube video details: {process.stderr.strip()}")
+                        return
                 except Exception as e:
-                    st.error(f"Failed to get YouTube video details: {e}")
+                    st.error(f"An error occurred while fetching YouTube video details: {e}")
                     return
             else:
                 st.error("Please enter a valid Spotify or YouTube URL.")
