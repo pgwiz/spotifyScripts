@@ -9,12 +9,19 @@ import shutil
 from zipfile import ZipFile
 
 # --- Configuration ---
-API_BASE_URL = 'https://spotify-one-lime.vercel.app'  # Your Vercel API URL
-COOKIES_FILE_PATH = "cookies.txt"  # Define the path for the cookies file
+API_BASE_URL = 'https://spotify-one-lime.vercel.app'
+COOKIES_FILE_PATH = "cookies.txt"
+
+# --- PROXY CONFIGURATION ---
+# The base URL of your custom Node.js application-level proxy.
+# This will be used to wrap all YouTube URLs.
+PROXY_BASE_URL = "https://territorial-klara-pgwiz-43ae3de3.koyeb.app"
+
 
 def get_ffmpeg_path():
-    """Check for ffmpeg executable."""
+    """Check for ffmpeg executable in the system's PATH."""
     return shutil.which("ffmpeg")
+
 
 async def fetch_spotify_data(spotify_url):
     """Fetches track data from the Spotify API."""
@@ -27,67 +34,80 @@ async def fetch_spotify_data(spotify_url):
                 return data
             elif isinstance(data, dict) and 'tracks' in data:
                 return data['tracks']
-            else:
-                return None
+            return None
     except httpx.RequestError as e:
-        st.error(f"Error connecting to the API: {e}")
+        st.error(f"Error connecting to the Spotify API: {e}")
         return None
 
+
 def download_track(track, save_dir, ffmpeg_path):
-    """Downloads a single track using yt-dlp."""
+    """
+    Downloads a single track using yt-dlp.
+    It wraps the YouTube URL with the proxy URL to bypass restrictions.
+    """
     try:
+        # Sanitize track name and artist for a valid filename
         sanitized_name = re.sub(r'[\\/*?:"<>|]', "", track.get('name', 'Unknown'))
         artist = track.get('artist')
-        
         if artist and artist != 'N/A':
             sanitized_artist = re.sub(r'[\\/*?:"<>|]', "", artist)
             filename = f"{sanitized_artist} - {sanitized_name}.mp3"
         else:
             filename = f"{sanitized_name}.mp3"
-        
+
         filepath = os.path.join(save_dir, filename)
 
         if os.path.exists(filepath):
             return filepath, f"Skipped: {filename} (already exists)"
 
-        youtube_url = track.get('videoId')
-        if not youtube_url:
+        # Construct the full YouTube URL from the video ID
+        video_id = track.get('videoId')
+        if not video_id:
             return None, f"Skipped: {track.get('name')} (no YouTube ID found)"
+        youtube_url = f"https://www.youtube.com/watch?v={video_id}"
 
-        temp_output_template = os.path.join(save_dir, f"{track.get('videoId')}.%(ext)s")
-        
-        # --- MODIFIED PART ---
-        # Base command for yt-dlp
+        # --- MODIFIED PROXY LOGIC ---
+        # "Wrap" the YouTube URL with your proxy's URL.
+        # This sends the request to your proxy first.
+        download_url = f"{PROXY_BASE_URL}/{youtube_url}"
+        st.info(f"Using proxy: {PROXY_BASE_URL}")
+
+        temp_output_template = os.path.join(save_dir, f"{video_id}.%(ext)s")
+
+        # Build the yt-dlp command. Note the ABSENCE of the --proxy flag.
         command = [
             "yt-dlp",
-            "--proxy", "https://territorial-klara-pgwiz-43ae3396.koyeb.app",
-            "--cookies", COOKIES_FILE_PATH,
             "--ffmpeg-location", ffmpeg_path,
             "-f", "bestaudio/best",
             "-x",
             "--audio-format", "mp3",
         ]
-        
-        # Add the remaining arguments
+
+        # Add cookies argument if cookies.txt exists
+        if os.path.exists(COOKIES_FILE_PATH):
+            command.extend(["--cookies", COOKIES_FILE_PATH])
+
+        # Add the output template and the final (wrapped) URL
         command.extend([
             "--output", temp_output_template,
-            youtube_url,
+            download_url,  # This is the URL that points to your proxy
         ])
+        
         # --- END OF MODIFICATION ---
 
         process = subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
-        
+
         if process.returncode == 0:
-            temp_filepath = os.path.join(save_dir, f"{track.get('videoId')}.mp3")
+            temp_filepath = os.path.join(save_dir, f"{video_id}.mp3")
             if os.path.exists(temp_filepath):
                 shutil.move(temp_filepath, filepath)
                 return filepath, f"Downloaded: {filename}"
         
-        # Provide more detailed error logging if download fails
         error_message = process.stderr or "Unknown error"
         return None, f"Failed: {filename}\nError: {error_message.strip()}"
     except Exception as e:
         return None, f"Error downloading {track.get('name', 'Unknown')}: {e}"
+
 
 def main():
     st.set_page_config(page_title="Music Downloader", page_icon="🎵", layout="centered")
@@ -95,9 +115,10 @@ def main():
     st.title("🎵 Spotify & YouTube Downloader")
     st.markdown("Paste a Spotify or YouTube link below to download the audio.")
     
-    # --- NEW ---
-    # Inform the user about the cookies feature
-    st.info(f"💡 To download age-restricted or private content, place a `{COOKIES_FILE_PATH}` file in the app's root directory.")
+    st.info(f"""
+    **Using Proxy:** All downloads are routed through `{PROXY_BASE_URL}` to improve success rates.  
+    **Cookies:** For age-restricted content, place a `cookies.txt` file in the app's root directory.
+    """)
 
     if 'download_dir' not in st.session_state:
         st.session_state.download_dir = f"temp_downloads_{os.urandom(8).hex()}"
@@ -105,7 +126,7 @@ def main():
 
     ffmpeg_path = get_ffmpeg_path()
     if not ffmpeg_path:
-        st.error("FFmpeg not found. Please ensure FFmpeg is installed and in your system's PATH. (Add it to packages.txt if deploying on Streamlit Cloud).")
+        st.error("FFmpeg not found. Please ensure FFmpeg is installed and in your system's PATH. (Add `ffmpeg` to packages.txt if deploying on Streamlit Cloud).")
         return
 
     url = st.text_input("Enter Spotify or YouTube URL:", "")
@@ -123,7 +144,6 @@ def main():
                     return
             elif "youtube.com" in url or "youtu.be" in url:
                 try:
-                    # Use yt-dlp to get both title and ID at once to be more efficient
                     info_command = ["yt-dlp", "--get-title", "--get-id", url]
                     process = subprocess.run(info_command, capture_output=True, text=True, encoding='utf-8', errors='ignore')
                     title, video_id = process.stdout.strip().split('\n')
